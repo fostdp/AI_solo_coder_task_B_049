@@ -19,6 +19,14 @@
                     </div>
                 </div>
             </div>
+            <div class="header-nav">
+                <button class="nav-btn active" data-view="monitor">
+                    <span>📊</span> 实时监测
+                </button>
+                <button class="nav-btn" data-view="analysis">
+                    <span>🔬</span> 高级分析
+                </button>
+            </div>
             <div class="status-section">
                 <div class="status-item">
                     <span class="status-dot" id="connection-status"></span>
@@ -43,7 +51,8 @@
         </header>
 
         <div class="main-content">
-            <aside class="sidebar-left">
+            <div class="view-panel active" id="view-monitor">
+                <aside class="sidebar-left">
                 <div class="panel">
                     <h3 class="panel-title">经络选择</h3>
                     <div class="meridian-list" id="meridian-list"></div>
@@ -147,6 +156,11 @@
                     <div class="chart-container" id="chart-features" style="height:200px"></div>
                 </div>
             </aside>
+            </div>
+
+            <div class="view-panel" id="view-analysis">
+                <div class="analysis-container" id="analysis-container"></div>
+            </div>
         </div>
 
         <footer class="app-footer">
@@ -161,6 +175,7 @@
 
     <script src="js/MeridianCanvas.js"></script>
     <script src="js/CurveChart.js"></script>
+    <script src="js/AdvancedAnalysis.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>
