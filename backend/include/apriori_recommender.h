@@ -32,13 +32,15 @@ public:
 
     void add_transaction(const std::vector<std::string>& acupoints, double pain_relief, double deqi_intensity);
 
-    void run_apriori(double min_support = 0.05, double min_confidence = 0.3, int max_len = 5);
+    void run_apriori(double min_support = 0.05, double min_confidence = 0.3,
+                     double min_lift = 1.2, int max_len = 5);
 
     std::vector<AcupointCombination> get_recommendations(
         const std::vector<std::string>& current_acupoints,
-        int top_k = 10) const;
+        int top_k = 10,
+        double min_lift = 1.2) const;
 
-    std::vector<AssociationRule> get_rules(int top_k = 20) const;
+    std::vector<AssociationRule> get_rules(int top_k = 20, double min_lift = 0.0) const;
     std::vector<AcupointCombination> get_frequent_itemsets(int min_count = 5) const;
 
     size_t transaction_count() const { return transactions_.size(); }
@@ -63,6 +65,7 @@ private:
     std::vector<Itemset> frequent_itemsets_;
     double min_support_;
     double min_confidence_;
+    double min_lift_;
 
     std::vector<Itemset> generate_candidates(const std::vector<Itemset>& prev, int k) const;
     int count_support(const std::set<std::string>& itemset) const;
