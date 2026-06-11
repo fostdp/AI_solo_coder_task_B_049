@@ -73,3 +73,16 @@ add_tcm_service(tcm_alerter
     ${CMAKE_CURRENT_SOURCE_DIR}/alerter/main.cpp
     "${ALERTER_SRCS}"
 )
+
+set(ANALYZER_SRCS
+    ${SHARED_DIR}/apriori_recommender.cpp
+    ${SHARED_DIR}/needle_technique_classifier.cpp
+    ${SHARED_DIR}/meridian_energy_balancer.cpp
+    ${SHARED_DIR}/q_learning_advisor.cpp
+    ${SHARED_DIR}/mongodb_manager.cpp
+    ${SHARED_DIR}/acupoint_data.cpp
+)
+add_tcm_service(tcm_analyzer
+    ${CMAKE_CURRENT_SOURCE_DIR}/analyzer/main.cpp
+    "${ANALYZER_SRCS}"
+)
