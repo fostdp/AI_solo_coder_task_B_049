@@ -126,13 +126,29 @@ TEST_CAT(Apriori, clear后事务数清零) {
     return ap.transaction_count() == 0 && ap.get_rules(10).empty();
 }
 
+TEST_CAT(Apriori, 稀疏数据提升度过滤无效规则) {
+    AprioriRecommender ap;
+    for (int i = 0; i < 5; ++i) ap.add_transaction({"A","B"}, 0.5, 0.5);
+    for (int i = 0; i < 95; ++i) ap.add_transaction({"A"}, 0.3, 0.3);
+    for (int i = 0; i < 95; ++i) ap.add_transaction({"B"}, 0.3, 0.3);
+    for (int i = 0; i < 3; ++i) ap.add_transaction({"C","D"}, 0.5, 0.5);
+    for (int i = 0; i < 97; ++i) ap.add_transaction({"C"}, 0.3, 0.3);
+    for (int i = 0; i < 97; ++i) ap.add_transaction({"D"}, 0.3, 0.3);
+    ap.run_apriori(0.01, 0.01, 1.2, 2);
+    auto rules = ap.get_rules(100);
+    for (auto& r : rules) {
+        if (r.lift < 1.2) return false;
+    }
+    return rules.empty() || rules.size() >= 1;
+}
+
 TEST_CAT(Apriori, 规则提升度计算正确) {
     AprioriRecommender ap;
     for (int i = 0; i < 100; ++i) ap.add_transaction({"A","B"}, 0.7, 0.7);
     for (int i = 0; i < 100; ++i) ap.add_transaction({"A"}, 0.3, 0.3);
     for (int i = 0; i < 100; ++i) ap.add_transaction({"B"}, 0.3, 0.3);
     for (int i = 0; i < 100; ++i) ap.add_transaction({"C"}, 0.3, 0.3);
-    ap.run_apriori(0.05, 0.05, 2);
+    ap.run_apriori(0.05, 0.05, 1.0, 2);
     auto rules = ap.get_rules(100);
     for (auto& r : rules) {
         if (r.lift < 0.0) return false;
