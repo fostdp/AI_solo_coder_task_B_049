@@ -9,7 +9,7 @@
 namespace tcm {
 
 NeedleTechniqueClassifier::NeedleTechniqueClassifier()
-    : sample_rate_(1000), window_size_(500) {
+    : sample_rate_(1000), window_size_(500), rng_(42) {
     build_default_model();
 }
 
@@ -18,6 +18,7 @@ void NeedleTechniqueClassifier::initialize(int sample_rate, int window_size) {
     window_size_ = window_size;
     emg_buffer_.clear();
     timestamp_buffer_.clear();
+    rng_.seed(42);
 }
 
 void NeedleTechniqueClassifier::build_default_model() {
@@ -103,7 +104,8 @@ NeedleTechniqueClassifier::analyze(const std::vector<double>& emg_signal, uint64
         return result;
     }
 
-    result.features = extract_features(emg_signal);
+    auto denoised = denoise_signal_internal(emg_signal);
+    result.features = extract_features(denoised);
 
     result.lifting_frequency_hz = 0;
     result.twirling_frequency_hz = 0;
@@ -431,19 +433,281 @@ std::vector<double> NeedleTechniqueClassifier::relu(const std::vector<double>& x
 
 void NeedleTechniqueClassifier::add_sample(
     const std::vector<double>& emg_signal, NeedleTechnique label) {
-    (void)emg_signal;
-    (void)label;
+    training_samples_.push_back(emg_signal);
+    training_labels_.push_back(label);
 }
 
 bool NeedleTechniqueClassifier::train(
     const std::vector<std::vector<double>>& samples,
     const std::vector<NeedleTechnique>& labels,
     int epochs, double learning_rate) {
-    (void)samples;
-    (void)labels;
-    (void)epochs;
-    (void)learning_rate;
+
+    if (samples.size() != labels.size() || samples.empty()) return false;
+
+    training_samples_ = samples;
+    training_labels_ = labels;
+
+    std::vector<NeedleTechnique> aug_labels;
+    auto aug_samples = augment_samples(samples, labels, aug_labels, 4);
+
+    init_random_weights();
+
+    double loss_sum = 0;
+    int batch_size = 32;
+    int n = (int)aug_samples.size();
+    std::uniform_int_distribution<> dist(0, n - 1);
+
+    for (int ep = 0; ep < epochs; ++ep) {
+        loss_sum = 0;
+        for (int b = 0; b < batch_size; ++b) {
+            int idx = dist(rng_);
+            const auto& sample = aug_samples[idx];
+            auto label = aug_labels[idx];
+
+            auto denoised = denoise_signal_internal(sample);
+            auto feat = extract_features(denoised);
+            auto feat_vec = flatten_features(feat);
+
+            auto x = feat_vec;
+            for (const auto& layer : dense_layers_) {
+                x = dense_forward(x, layer);
+            }
+
+            std::vector<double> target(6, 0.0);
+            target[(int)label] = 1.0;
+
+            double loss = 0;
+            for (size_t i = 0; i < x.size(); ++i) {
+                loss += -target[i] * log(x[i] + 1e-10);
+            }
+            loss_sum += loss;
+
+            std::vector<double> delta(x.size());
+            for (size_t i = 0; i < x.size(); ++i) {
+                delta[i] = x[i] - target[i];
+            }
+
+            for (int li = (int)dense_layers_.size() - 1; li >= 0; --li) {
+                auto& layer = dense_layers_[li];
+                std::vector<double> prev_delta(layer.in_features, 0.0);
+
+                for (int i = 0; i < layer.out_features; ++i) {
+                    double d = delta[i];
+                    for (int j = 0; j < layer.in_features; ++j) {
+                        if (j < (int)feat_vec.size() && j < (int)layer.weights[i].size()) {
+                            double grad = d * feat_vec[j];
+                            layer.weights[i][j] -= learning_rate * grad;
+                            prev_delta[j] += d * layer.weights[i][j];
+                        }
+                    }
+                    layer.biases[i] -= learning_rate * d;
+                }
+
+                if (layer.activation == "relu") {
+                    for (int j = 0; j < layer.in_features; ++j) {
+                        if (feat_vec[j] <= 0) prev_delta[j] = 0;
+                    }
+                }
+                delta = prev_delta;
+            }
+        }
+    }
+
     return true;
+}
+
+std::vector<double> NeedleTechniqueClassifier::denoise_signal(
+    const std::vector<double>& signal, int sample_rate) {
+    NeedleTechniqueClassifier c;
+    c.sample_rate_ = sample_rate;
+    return c.denoise_signal_internal(signal);
+}
+
+std::vector<double> NeedleTechniqueClassifier::denoise_signal_internal(
+    const std::vector<double>& signal) const {
+    auto s1 = remove_baseline_drift(signal);
+    auto s2 = notch_filter_50hz(s1);
+    auto s3 = moving_average_filter(s2, 5);
+    return s3;
+}
+
+std::vector<double> NeedleTechniqueClassifier::moving_average_filter(
+    const std::vector<double>& signal, int window) const {
+    int n = (int)signal.size();
+    if (n < window || window < 1) return signal;
+
+    std::vector<double> result(n, 0.0);
+    double sum = 0;
+    int half = window / 2;
+
+    for (int i = 0; i < std::min(half + 1, n); ++i) sum += signal[i];
+    for (int i = 0; i < n; ++i) {
+        if (i + half < n) sum += signal[i + half];
+        if (i - half - 1 >= 0) sum -= signal[i - half - 1];
+        int cnt = std::min(i + half + 1, n) - std::max(0, i - half);
+        result[i] = sum / std::max(1, cnt);
+    }
+    return result;
+}
+
+std::vector<double> NeedleTechniqueClassifier::remove_baseline_drift(
+    const std::vector<double>& signal) const {
+    int n = (int)signal.size();
+    if (n < 50) return signal;
+
+    int window = n / 10;
+    if (window < 10) window = 10;
+    if (window > 100) window = 100;
+
+    auto smoothed = moving_average_filter(signal, window);
+
+    std::vector<double> result(n);
+    for (int i = 0; i < n; ++i) {
+        result[i] = signal[i] - smoothed[i];
+    }
+    return result;
+}
+
+std::vector<double> NeedleTechniqueClassifier::notch_filter_50hz(
+    const std::vector<double>& signal) const {
+    int n = (int)signal.size();
+    if (n < 4) return signal;
+
+    double w0 = 2 * M_PI * 50.0 / sample_rate_;
+    double r = 0.95;
+    double b0 = 1;
+    double b1 = -2 * cos(w0);
+    double b2 = 1;
+    double a1 = -2 * r * cos(w0);
+    double a2 = r * r;
+
+    std::vector<double> result(n);
+    result[0] = signal[0];
+    if (n > 1) result[1] = signal[1];
+
+    for (int i = 2; i < n; ++i) {
+        result[i] = b0 * signal[i] + b1 * signal[i-1] + b2 * signal[i-2]
+                  - a1 * result[i-1] - a2 * result[i-2];
+    }
+    return result;
+}
+
+std::vector<std::vector<double>> NeedleTechniqueClassifier::augment_samples(
+    const std::vector<std::vector<double>>& samples,
+    const std::vector<NeedleTechnique>& labels,
+    std::vector<NeedleTechnique>& augmented_labels,
+    int augment_factor) const {
+
+    std::vector<std::vector<double>> result;
+    augmented_labels.clear();
+
+    for (size_t i = 0; i < samples.size(); ++i) {
+        result.push_back(samples[i]);
+        augmented_labels.push_back(labels[i]);
+
+        for (int a = 1; a < augment_factor; ++a) {
+            auto aug = samples[i];
+
+            int aug_type = a % 5;
+            switch (aug_type) {
+                case 0:
+                    aug = add_gaussian_noise(aug, 15.0 + (a % 5) * 2.0);
+                    break;
+                case 1:
+                    aug = amplitude_scale(aug, 0.85 + (a % 4) * 0.05);
+                    break;
+                case 2:
+                    aug = time_shift(aug, (a % 2 == 0 ? 1 : -1) * (10 + a * 3));
+                    break;
+                case 3:
+                    aug = time_warp(aug, 0.05 + (a % 5) * 0.02);
+                    break;
+                case 4:
+                    aug = add_gaussian_noise(aug, 10.0);
+                    aug = amplitude_scale(aug, 0.9 + (a % 3) * 0.05);
+                    break;
+            }
+
+            result.push_back(aug);
+            augmented_labels.push_back(labels[i]);
+        }
+    }
+    return result;
+}
+
+std::vector<double> NeedleTechniqueClassifier::time_warp(
+    const std::vector<double>& signal, double sigma) const {
+    int n = (int)signal.size();
+    if (n < 2) return signal;
+
+    std::normal_distribution<> nd(0, sigma);
+    std::vector<double> warp(n);
+    for (int i = 0; i < n; ++i) warp[i] = nd(rng_);
+
+    std::vector<double> cum_warp(n + 1, 0.0);
+    for (int i = 0; i < n; ++i) cum_warp[i+1] = cum_warp[i] + 1.0 + warp[i];
+
+    double total = cum_warp[n] / n;
+    for (int i = 0; i <= n; ++i) cum_warp[i] /= total;
+
+    std::vector<double> result(n);
+    for (int i = 0; i < n; ++i) {
+        double target = (double)i;
+        int j = 0;
+        while (j < n && cum_warp[j+1] < target) j++;
+        if (j >= n - 1) j = n - 2;
+        double t = (target - cum_warp[j]) / (cum_warp[j+1] - cum_warp[j] + 1e-10);
+        t = std::max(0.0, std::min(1.0, t));
+        result[i] = signal[j] * (1 - t) + signal[j+1] * t;
+    }
+    return result;
+}
+
+std::vector<double> NeedleTechniqueClassifier::time_shift(
+    const std::vector<double>& signal, int shift) const {
+    int n = (int)signal.size();
+    if (n == 0) return signal;
+    int s = ((shift % n) + n) % n;
+    std::vector<double> result(n);
+    for (int i = 0; i < n; ++i) {
+        result[i] = signal[(i - s + n) % n];
+    }
+    return result;
+}
+
+std::vector<double> NeedleTechniqueClassifier::amplitude_scale(
+    const std::vector<double>& signal, double scale) const {
+    std::vector<double> result(signal.size());
+    for (size_t i = 0; i < signal.size(); ++i) {
+        result[i] = signal[i] * scale;
+    }
+    return result;
+}
+
+double NeedleTechniqueClassifier::compute_signal_power(
+    const std::vector<double>& signal) const {
+    double sum = 0;
+    for (double x : signal) sum += x * x;
+    return sum / std::max(1, (int)signal.size());
+}
+
+std::vector<double> NeedleTechniqueClassifier::add_gaussian_noise(
+    const std::vector<double>& signal, double snr_db) const {
+    double signal_power = compute_signal_power(signal);
+    double noise_power = signal_power / std::pow(10, snr_db / 10.0);
+    double noise_std = std::sqrt(noise_power);
+
+    std::normal_distribution<> nd(0, noise_std);
+    std::vector<double> result(signal.size());
+    for (size_t i = 0; i < signal.size(); ++i) {
+        result[i] = signal[i] + nd(rng_);
+    }
+    return result;
+}
+
+void NeedleTechniqueClassifier::reset_buffer() {
+    emg_buffer_.clear();
+    timestamp_buffer_.clear();
 }
 
 std::string NeedleTechniqueClassifier::technique_to_string(NeedleTechnique t) {
@@ -465,11 +729,6 @@ NeedleTechnique NeedleTechniqueClassifier::string_to_technique(const std::string
     if (s == "reducing") return NeedleTechnique::REDUCING;
     if (s == "even_method") return NeedleTechnique::EVEN_METHOD;
     return NeedleTechnique::RESTING;
-}
-
-void NeedleTechniqueClassifier::reset_buffer() {
-    emg_buffer_.clear();
-    timestamp_buffer_.clear();
 }
 
 } // namespace tcm
