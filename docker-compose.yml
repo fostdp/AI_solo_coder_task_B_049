@@ -90,6 +90,18 @@ services:
       tcm-ingest:
         condition: service_started
 
+  tcm-analyzer:
+    <<: *backend-common
+    container_name: tcm-analyzer
+    command: ["/app/tcm_analyzer", "--config", "/app/config.yaml"]
+    ports:
+      - "8085:8085"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      tcm-ingest:
+        condition: service_started
+
   tcm-frontend:
     build:
       context: .
@@ -105,6 +117,7 @@ services:
       - tcm-predictor
       - tcm-topology
       - tcm-alerter
+      - tcm-analyzer
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/"]
       interval: 15s
@@ -146,6 +159,7 @@ services:
       - tcm-predictor
       - tcm-topology
       - tcm-alerter
+      - tcm-analyzer
 
   grafana:
     image: grafana/grafana:10.4.0
