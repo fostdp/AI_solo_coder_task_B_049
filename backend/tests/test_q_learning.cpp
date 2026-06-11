@@ -22,19 +22,21 @@ static AcupunctureState make_state(const std::string& vol, const std::string& me
 
 TEST_CAT(QLearn, 初始化探索率正确) {
     QLearningAdvisor q;
-    q.initialize(0.1, 0.95, 0.2, 0.995);
+    q.initialize(0.001, 0.01, 0.95, 0.2);
     return approx_eq(q.get_exploration_rate(), 0.2, 1e-6);
 }
 
 TEST_CAT(QLearn, 推荐动作返回合法动作) {
     QLearningAdvisor q;
-    q.initialize(0.1, 0.95, 0.2, 0.995);
+    q.initialize(0.001, 0.01, 0.95, 0.2);
     auto state = make_state("V001", "ST", 0.7, 0.5);
     auto res = q.recommend_action(state);
     auto acts = q.get_all_actions();
     bool valid_idx = res.recommended_action.action_index >= 0
                   && res.recommended_action.action_index < (int)acts.size();
-    return valid_idx && res.confidence >= 0.0 && res.confidence <= 1.0;
+    return valid_idx && res.confidence >= 0.0 && res.confidence <= 1.0
+        && res.action_probabilities.size() == acts.size()
+        && !std::isnan(res.state_value);
 }
 
 TEST_CAT(QLearn, 动作空间18种组合) {
@@ -46,7 +48,7 @@ TEST_CAT(QLearn, 动作空间18种组合) {
 
 TEST_CAT(QLearn, 记录反馈后更新次数增加) {
     QLearningAdvisor q;
-    q.initialize(0.1, 0.95, 0.0, 1.0);
+    q.initialize(0.001, 0.01, 0.95, 0.0);
     auto s1 = make_state("V001", "ST", 0.5, 0.5);
     auto r1 = q.recommend_action(s1);
     auto s2 = s1;
@@ -59,24 +61,27 @@ TEST_CAT(QLearn, 记录反馈后更新次数增加) {
     return after > before;
 }
 
-TEST_CAT(QLearn, 收敛到最优策略) {
+TEST_CAT(QLearn, ActorCritic无振荡收敛到最优策略) {
     QLearningAdvisor q;
-    q.initialize(0.2, 0.95, 0.3, 0.998);
-    q.set_exploration_rate(0.3);
+    q.initialize(0.001, 0.01, 0.95, 0.2);
+    q.set_exploration_rate(0.2);
     const int BEST_ACTION = 3;
-    const int EPISODES = 800;
+    const int EPISODES = 1000;
     auto state = make_state("V_CONV", "ST", 0.6, 0.6);
     std::mt19937 rng(777);
     std::uniform_real_distribution<> rd(0, 1);
-    int selected_best = 0, last_100 = 0, last_total = 0;
+    int last_100 = 0;
+    std::vector<int> best_count_window;
+    int window_best = 0;
+
     for (int ep = 0; ep < EPISODES; ++ep) {
         auto res = q.recommend_action(state);
         auto act = res.recommended_action;
         double reward;
         if (act.action_index == BEST_ACTION) {
             reward = 1.0 + rd(rng) * 0.2;
-            selected_best++;
             if (ep >= EPISODES - 100) last_100++;
+            window_best++;
         } else {
             reward = -0.2 + rd(rng) * 0.2;
         }
@@ -86,20 +91,32 @@ TEST_CAT(QLearn, 收敛到最优策略) {
         ns.pain_level = 0.3 + rd(rng) * 0.2;
         q.record_result(state, act, reward, ns, true);
         q.decay_exploration();
-        last_total++;
+
+        if ((ep + 1) % 100 == 0) {
+            best_count_window.push_back(window_best);
+            window_best = 0;
+        }
     }
+
+    int stable = 0;
+    for (size_t i = 1; i < best_count_window.size(); ++i) {
+        if (best_count_window[i] >= best_count_window[i - 1] * 0.7) {
+            stable++;
+        }
+    }
+
     q.set_exploration_rate(0.0);
     int greedy_best = 0;
     for (int i = 0; i < 50; ++i) {
         auto r = q.recommend_action(state);
         if (r.recommended_action.action_index == BEST_ACTION) greedy_best++;
     }
-    return (last_100 >= 60) || (greedy_best >= 40);
+    return (last_100 >= 50) && (stable >= (int)best_count_window.size() - 2) && (greedy_best >= 35);
 }
 
 TEST_CAT(QLearn, 探索率随衰减降低) {
     QLearningAdvisor q;
-    q.initialize(0.1, 0.95, 0.5, 0.95);
+    q.initialize(0.001, 0.01, 0.95, 0.5);
     auto initial = q.get_exploration_rate();
     for (int i = 0; i < 50; ++i) q.decay_exploration();
     return q.get_exploration_rate() < initial;
@@ -142,7 +159,7 @@ TEST_CAT(QLearn, 动作索引双向转换) {
 
 TEST_CAT(QLearn, ε贪婪_ε为零时动作一致) {
     QLearningAdvisor q;
-    q.initialize(0.1, 0.95, 0.0, 1.0);
+    q.initialize(0.001, 0.01, 0.95, 0.0);
     auto s = make_state("V001", "ST", 0.5, 0.5);
     int idx0 = q.recommend_action(s).recommended_action.action_index;
     int same = 0;
@@ -152,9 +169,36 @@ TEST_CAT(QLearn, ε贪婪_ε为零时动作一致) {
     return same == 20;
 }
 
+TEST_CAT(QLearn, 奖励归一化防止大梯度振荡) {
+    QLearningAdvisor q;
+    q.initialize(0.001, 0.01, 0.95, 0.0);
+    auto s = make_state("V_OSC", "SP", 0.5, 0.5);
+    auto act = QLearningAdvisor::action_from_index(0);
+    auto ns = s;
+    ns.current_duration_min = act.needle_retention_min;
+    q.record_result(s, act, 1000.0, ns, true);
+    q.record_result(s, act, -1000.0, ns, true);
+    auto res = q.recommend_action(s);
+    bool finite = !std::isnan(res.state_value) && std::isfinite(res.state_value);
+    for (auto p : res.action_probabilities) {
+        if (!std::isfinite(p) || p < 0 || p > 1.01) finite = false;
+    }
+    return finite;
+}
+
+TEST_CAT(QLearn, TD误差计算有效) {
+    QLearningAdvisor q;
+    q.initialize(0.001, 0.01, 0.95, 0.0);
+    auto s = make_state("V_TD", "SP", 0.5, 0.5);
+    auto ns = s;
+    ns.deqi_intensity = 0.8;
+    double td = q.compute_td_error(1.0, "stateA", "stateB", false);
+    return std::isfinite(td) && td >= -10 && td <= 10;
+}
+
 TEST_CAT(QLearn, 高负奖励使动作被避免) {
     QLearningAdvisor q;
-    q.initialize(0.5, 0.9, 0.0, 1.0);
+    q.initialize(0.01, 0.1, 0.9, 0.0);
     auto s = make_state("V_PEN", "SP", 0.5, 0.5);
     int bad_action = 5;
     for (int i = 0; i < 200; ++i) {
