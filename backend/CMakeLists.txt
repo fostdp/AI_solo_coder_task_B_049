@@ -44,4 +44,10 @@ if(WIN32)
     target_link_libraries(tcm_backend PRIVATE ws2_32 mswsock)
 endif()
 
+option(BUILD_TESTS "Build unit tests" ON)
+
 add_subdirectory(services)
+
+if(BUILD_TESTS)
+    add_subdirectory(tests)
+endif()
