@@ -1,0 +1,16 @@
+build/
+.git/
+.vscode/
+.idea/
+*.md
+!README.md
+node_modules/
+*.o
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.log
+cmake_install.cmake
+CMakeCache.txt
+CMakeFiles/
