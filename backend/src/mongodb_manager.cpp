@@ -410,6 +410,36 @@ std::vector<EfficacyRecord> MongoDBManager::query_efficacy_records(
     return result;
 }
 
+std::vector<EfficacyRecord> MongoDBManager::get_all_efficacy_records(int limit) {
+    std::vector<EfficacyRecord> result;
+#if HAS_MONGOCXX
+    if (!impl_->connected) return result;
+    try {
+        auto coll = impl_->db["efficacy_records"];
+        mongocxx::options::find opts;
+        opts.sort(bsoncxx::builder::stream::document{}
+                  << "timestamp" << -1
+                  << bsoncxx::builder::stream::finalize);
+        opts.limit(limit);
+        auto cursor = coll.find({}, opts);
+        for (auto&& doc : cursor) {
+            EfficacyRecord r;
+            try {
+                r.volunteer_id = std::string(doc["volunteer_id"].get_utf8().value);
+                r.session_id = std::string(doc["session_id"].get_utf8().value);
+                r.acupoint_id = std::string(doc["acupoint_id"].get_utf8().value);
+                r.timestamp = (uint64_t)doc["timestamp"].get_int64().value;
+                r.deqi_intensity = doc["deqi_intensity"].get_double().value;
+                r.pain_relief_rate = doc["pain_relief_rate"].get_double().value;
+                r.efficacy_text = std::string(doc["efficacy_text"].get_utf8().value);
+                result.push_back(r);
+            } catch (...) {}
+        }
+    } catch (...) {}
+#endif
+    return result;
+}
+
 bool MongoDBManager::insert_alert(const Alert& alert) {
 #if HAS_MONGOCXX
     if (!impl_->connected) return false;
