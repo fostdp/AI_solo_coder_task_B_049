@@ -1,0 +1,59 @@
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git wget \
+    libmongoc-dev libmongocxx-dev libbsoncxx-dev \
+    libssl-dev zlib1g-dev \
+    libspdlog-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+COPY third_party/crow/include /build/third_party/crow/include
+COPY backend /build/backend
+COPY config.yaml /build/config.yaml
+
+RUN mkdir -p /build/prometheus-cpp && \
+    cd /build/prometheus-cpp && \
+    git init && \
+    git remote add origin https://github.com/jupp0r/prometheus-cpp.git && \
+    git fetch --depth=1 origin v1.2.4 && \
+    git checkout FETCH_HEAD && \
+    git submodule update --init --recursive --depth=1 && \
+    mkdir build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DUSE_THIRDPARTY_LIBRARIES=OFF -DENABLE_TESTING=OFF && \
+    make -j$(nproc) && make install
+
+RUN mkdir -p /build/release && cd /build/release && \
+    cmake /build/backend -DCMAKE_BUILD_TYPE=Release && \
+    make -j$(nproc)
+
+FROM ubuntu:22.04 AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libmongoc-1.0-0 libmongocxx3.6 libbsoncxx3.6 \
+    libssl3 zlib1g \
+    libspdlog1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r tcm && useradd -r -g tcm -d /app -s /sbin/nologin tcm
+
+COPY --from=builder /build/release/tcm_backend /app/tcm_backend
+COPY --from=builder /build/release/services/tcm_ingest /app/tcm_ingest
+COPY --from=builder /build/release/services/tcm_predictor /app/tcm_predictor
+COPY --from=builder /build/release/services/tcm_topology /app/tcm_topology
+COPY --from=builder /build/release/services/tcm_alerter /app/tcm_alerter
+COPY --from=builder /build/config.yaml /app/config.yaml
+COPY --from=builder /usr/local/lib/libprometheus-cpp* /usr/lib/
+
+RUN mkdir -p /app/logs /app/models && chown -R tcm:tcm /app
+
+USER tcm
+WORKDIR /app
+
+EXPOSE 8080 8081 8082 8083 8084
+
+ENV LD_LIBRARY_PATH=/usr/lib
+
+CMD ["/app/tcm_ingest", "--config", "/app/config.yaml"]
