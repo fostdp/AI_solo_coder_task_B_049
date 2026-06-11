@@ -33,7 +33,10 @@ struct QLearningResult {
     double confidence;
     std::vector<AcupunctureAction> top_actions;
     std::vector<double> action_values;
+    std::vector<double> action_probabilities;
     bool is_exploration;
+    double state_value;
+    double td_error;
 };
 
 struct TrainingEpisode {
@@ -50,10 +53,10 @@ public:
     QLearningAdvisor();
     ~QLearningAdvisor() = default;
 
-    void initialize(double learning_rate = 0.1,
+    void initialize(double actor_lr = 0.001,
+                    double critic_lr = 0.01,
                     double discount_factor = 0.95,
-                    double exploration_rate = 0.2,
-                    double exploration_decay = 0.995);
+                    double exploration_rate = 0.2);
 
     QLearningResult recommend_action(const AcupunctureState& state);
 
@@ -72,7 +75,7 @@ public:
     std::vector<AcupunctureAction> get_all_actions() const;
     int get_action_count() const { return (int)actions_.size(); }
 
-    size_t get_state_count() const { return q_table_.size(); }
+    size_t get_state_count() const { return critic_values_.size(); }
     size_t get_total_updates() const { return total_updates_; }
 
     void load_model(const std::string& path);
@@ -85,29 +88,38 @@ public:
     static AcupunctureAction action_from_index(int index);
     static int action_to_index(const AcupunctureAction& action);
 
+    double compute_td_error(double reward, const std::string& state_key,
+                            const std::string& next_state_key, bool done);
+
 private:
-    double learning_rate_;
+    double actor_learning_rate_;
+    double critic_learning_rate_;
     double discount_factor_;
     double exploration_rate_;
     double exploration_decay_;
     double min_exploration_rate_;
 
     std::vector<AcupunctureAction> actions_;
-    std::map<std::string, std::vector<double>> q_table_;
-    std::map<std::string, int> state_visit_count_;
+
+    std::map<std::string, std::vector<double>> actor_weights_;
+    std::map<std::string, double> critic_values_;
+
+    mutable std::mt19937 rng_;
 
     size_t total_updates_;
     double total_reward_;
     size_t reward_count_;
 
-    mutable std::mt19937 rng_;
-
     std::string state_to_key(const AcupunctureState& state) const;
-    std::vector<double> get_q_values(const std::string& state_key);
     void ensure_state_exists(const std::string& state_key);
 
-    int select_action_epsilon_greedy(const std::vector<double>& q_values);
-    int select_best_action(const std::vector<double>& q_values) const;
+    std::vector<double> get_action_preferences(const std::string& state_key);
+    std::vector<double> compute_softmax(const std::vector<double>& preferences) const;
+    int sample_action_from_probabilities(const std::vector<double>& probs);
+    int select_best_action(const std::vector<double>& probs) const;
+
+    void update_actor(const std::string& state_key, int action_taken, double td_error);
+    void update_critic(const std::string& state_key, double td_error);
 
     double compute_reward(const AcupunctureState& state,
                           const AcupunctureAction& action,
@@ -118,6 +130,8 @@ private:
     std::string discretize_deqi(double deqi) const;
     std::string discretize_pain(double pain) const;
     std::string discretize_duration(double duration) const;
+
+    double normalize_reward(double raw_reward) const;
 };
 
 } // namespace tcm
