@@ -165,7 +165,7 @@ int main(int argc, char* argv[]) {
 
     technique.initialize(1000, 500);
     balancer.initialize(300.0);
-    q_learner.initialize(0.1, 0.95, 0.2, 0.995);
+    q_learner.initialize(0.001, 0.01, 0.95, 0.2);
 
     TCM_LOG_INFO(log, "Loading historical data for Apriori...");
     {
@@ -189,7 +189,7 @@ int main(int argc, char* argv[]) {
         TCM_LOG_INFO(log, "Loaded {} sessions for Apriori", session_acupoints.size());
 
         if (apriori.transaction_count() > 5) {
-            apriori.run_apriori(0.03, 0.25, 4);
+            apriori.run_apriori(0.03, 0.25, 1.2, 4);
             TCM_LOG_INFO(log, "Apriori generated {} rules", apriori.get_rules(1000).size());
         }
     }
