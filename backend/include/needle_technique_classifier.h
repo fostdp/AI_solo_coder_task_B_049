@@ -81,17 +81,29 @@ public:
                const std::vector<NeedleTechnique>& labels,
                int epochs = 50, double learning_rate = 0.01);
 
+    std::vector<std::vector<double>> augment_samples(
+        const std::vector<std::vector<double>>& samples,
+        const std::vector<NeedleTechnique>& labels,
+        std::vector<NeedleTechnique>& augmented_labels,
+        int augment_factor = 4) const;
+
     static std::string technique_to_string(NeedleTechnique t);
     static NeedleTechnique string_to_technique(const std::string& s);
 
     void reset_buffer();
     size_t buffer_size() const { return emg_buffer_.size(); }
 
+    static std::vector<double> denoise_signal(const std::vector<double>& signal, int sample_rate);
+
 private:
     int sample_rate_;
     int window_size_;
     std::deque<double> emg_buffer_;
     std::deque<uint64_t> timestamp_buffer_;
+    std::mt19937 rng_;
+
+    std::vector<std::vector<double>> training_samples_;
+    std::vector<NeedleTechnique> training_labels_;
 
     std::vector<Conv1DLayer> conv_layers_;
     std::vector<DenseLayer> dense_layers_;
@@ -131,6 +143,16 @@ private:
 
     void build_default_model();
     void init_random_weights();
+
+    std::vector<double> denoise_signal_internal(const std::vector<double>& signal) const;
+    std::vector<double> moving_average_filter(const std::vector<double>& signal, int window) const;
+    std::vector<double> remove_baseline_drift(const std::vector<double>& signal) const;
+    std::vector<double> notch_filter_50hz(const std::vector<double>& signal) const;
+    std::vector<double> time_warp(const std::vector<double>& signal, double sigma) const;
+    std::vector<double> time_shift(const std::vector<double>& signal, int shift) const;
+    std::vector<double> amplitude_scale(const std::vector<double>& signal, double scale) const;
+    std::vector<double> add_gaussian_noise(const std::vector<double>& signal, double snr_db) const;
+    double compute_signal_power(const std::vector<double>& signal) const;
 };
 
 } // namespace tcm
