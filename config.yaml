@@ -12,6 +12,9 @@ services:
   alerter:
     host: "0.0.0.0"
     http_port: 8084
+  analyzer:
+    host: "0.0.0.0"
+    http_port: 8085
 
 mongodb:
   uri: "mongodb://tcm:tcm_dev_2024@mongodb:27017"
@@ -54,6 +57,16 @@ simulator:
   interval_ms: 100
   inject_anomalies: true
   anomaly_probability: 0.005
+
+analyzer:
+  apriori_min_support: 0.03
+  apriori_min_confidence: 0.25
+  apriori_max_len: 4
+  energy_baseline_window_sec: 300
+  qlearning_learning_rate: 0.1
+  qlearning_discount_factor: 0.95
+  qlearning_exploration_rate: 0.2
+  qlearning_exploration_decay: 0.995
 
 logging:
   level: "info"
