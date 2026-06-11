@@ -6,7 +6,7 @@
 namespace tcm {
 
 AprioriRecommender::AprioriRecommender()
-    : min_support_(0.05), min_confidence_(0.3) {
+    : min_support_(0.05), min_confidence_(0.3), min_lift_(1.2) {
 }
 
 void AprioriRecommender::add_transaction(
@@ -28,9 +28,11 @@ void AprioriRecommender::clear() {
     frequent_itemsets_.clear();
 }
 
-void AprioriRecommender::run_apriori(double min_support, double min_confidence, int max_len) {
+void AprioriRecommender::run_apriori(double min_support, double min_confidence,
+                                      double min_lift, int max_len) {
     min_support_ = min_support;
     min_confidence_ = min_confidence;
+    min_lift_ = min_lift;
     rules_.clear();
     frequent_itemsets_.clear();
 
@@ -215,11 +217,11 @@ void AprioriRecommender::generate_rules_from_itemset(const Itemset& itemset) {
         double support = (double)itemset.count / transactions_.size();
         double confidence = (double)itemset.count / ant_count;
 
-        if (confidence >= min_confidence_) {
-            int cons_count = count_support(cons_set);
-            double cons_support = (double)cons_count / transactions_.size();
-            double lift = cons_support > 0 ? confidence / cons_support : 0.0;
+        int cons_count = count_support(cons_set);
+        double cons_support = (double)cons_count / transactions_.size();
+        double lift = cons_support > 0 ? confidence / cons_support : 0.0;
 
+        if (confidence >= min_confidence_ && lift >= min_lift_) {
             AssociationRule rule;
             rule.antecedent = std::vector<std::string>(ant_set.begin(), ant_set.end());
             rule.consequent = std::vector<std::string>(cons_set.begin(), cons_set.end());
@@ -252,7 +254,8 @@ AprioriRecommender::get_subsets(const std::set<std::string>& s) const {
 std::vector<AcupointCombination>
 AprioriRecommender::get_recommendations(
     const std::vector<std::string>& current_acupoints,
-    int top_k) const {
+    int top_k,
+    double min_lift) const {
 
     std::set<std::string> current_set(current_acupoints.begin(), current_acupoints.end());
     std::map<std::string, double> candidate_scores;
@@ -261,6 +264,8 @@ AprioriRecommender::get_recommendations(
     std::map<std::string, int> candidate_count;
 
     for (const auto& rule : rules_) {
+        if (rule.lift < min_lift) continue;
+
         std::set<std::string> ant_set(rule.antecedent.begin(), rule.antecedent.end());
 
         bool all_match = true;
@@ -332,8 +337,11 @@ AprioriRecommender::get_recommendations(
 }
 
 std::vector<AssociationRule>
-AprioriRecommender::get_rules(int top_k) const {
-    auto result = rules_;
+AprioriRecommender::get_rules(int top_k, double min_lift) const {
+    std::vector<AssociationRule> result;
+    for (const auto& r : rules_) {
+        if (r.lift >= min_lift) result.push_back(r);
+    }
     if ((int)result.size() > top_k) result.resize(top_k);
     return result;
 }
