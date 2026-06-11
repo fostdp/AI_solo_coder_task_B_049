@@ -4,11 +4,13 @@
 #include <sstream>
 #include <fstream>
 #include <iostream>
+#include <numeric>
 
 namespace tcm {
 
 QLearningAdvisor::QLearningAdvisor()
-    : learning_rate_(0.1)
+    : actor_learning_rate_(0.001)
+    , critic_learning_rate_(0.01)
     , discount_factor_(0.95)
     , exploration_rate_(0.2)
     , exploration_decay_(0.995)
@@ -20,14 +22,14 @@ QLearningAdvisor::QLearningAdvisor()
     init_default_actions();
 }
 
-void QLearningAdvisor::initialize(double learning_rate,
+void QLearningAdvisor::initialize(double actor_lr,
+                                  double critic_lr,
                                   double discount_factor,
-                                  double exploration_rate,
-                                  double exploration_decay) {
-    learning_rate_ = learning_rate;
+                                  double exploration_rate) {
+    actor_learning_rate_ = actor_lr;
+    critic_learning_rate_ = critic_lr;
     discount_factor_ = discount_factor;
     exploration_rate_ = exploration_rate;
-    exploration_decay_ = exploration_decay;
     total_updates_ = 0;
     total_reward_ = 0;
     reward_count_ = 0;
@@ -37,8 +39,6 @@ void QLearningAdvisor::init_default_actions() {
     actions_.clear();
 
     std::vector<double> durations = {10.0, 15.0, 20.0, 25.0, 30.0, 40.0};
-    std::vector<double> frequencies = {0.5, 1.0, 2.0, 3.0};
-    std::vector<double> depths = {5.0, 10.0, 15.0, 20.0};
 
     for (size_t i = 0; i < durations.size(); ++i) {
         AcupunctureAction a;
@@ -110,65 +110,95 @@ std::string QLearningAdvisor::state_to_key(const AcupunctureState& state) const 
 }
 
 void QLearningAdvisor::ensure_state_exists(const std::string& state_key) {
-    if (q_table_.find(state_key) == q_table_.end()) {
-        q_table_[state_key] = std::vector<double>(actions_.size(), 0.0);
-        state_visit_count_[state_key] = 0;
+    if (actor_weights_.find(state_key) == actor_weights_.end()) {
+        actor_weights_[state_key] = std::vector<double>(actions_.size(), 0.0);
+        critic_values_[state_key] = 0.0;
     }
 }
 
-std::vector<double> QLearningAdvisor::get_q_values(const std::string& state_key) {
+std::vector<double> QLearningAdvisor::get_action_preferences(const std::string& state_key) {
     ensure_state_exists(state_key);
-    return q_table_[state_key];
+    return actor_weights_[state_key];
 }
 
-int QLearningAdvisor::select_best_action(const std::vector<double>& q_values) const {
+std::vector<double> QLearningAdvisor::compute_softmax(const std::vector<double>& preferences) const {
+    std::vector<double> probs(preferences.size());
+    double max_pref = *std::max_element(preferences.begin(), preferences.end());
+    double sum_exp = 0;
+    for (size_t i = 0; i < preferences.size(); ++i) {
+        probs[i] = std::exp(preferences[i] - max_pref);
+        sum_exp += probs[i];
+    }
+    if (sum_exp > 0) {
+        for (auto& p : probs) p /= sum_exp;
+    } else {
+        double uniform = 1.0 / probs.size();
+        for (auto& p : probs) p = uniform;
+    }
+    return probs;
+}
+
+int QLearningAdvisor::sample_action_from_probabilities(const std::vector<double>& probs) {
+    std::uniform_real_distribution<> dist(0.0, 1.0);
+    double r = dist(rng_);
+    double cum = 0;
+    for (size_t i = 0; i < probs.size(); ++i) {
+        cum += probs[i];
+        if (r <= cum) return (int)i;
+    }
+    return (int)probs.size() - 1;
+}
+
+int QLearningAdvisor::select_best_action(const std::vector<double>& probs) const {
     int best_idx = 0;
-    double best_val = q_values[0];
-    for (size_t i = 1; i < q_values.size(); ++i) {
-        if (q_values[i] > best_val) {
-            best_val = q_values[i];
+    double best = probs[0];
+    for (size_t i = 1; i < probs.size(); ++i) {
+        if (probs[i] > best) {
+            best = probs[i];
             best_idx = (int)i;
         }
     }
     return best_idx;
 }
 
-int QLearningAdvisor::select_action_epsilon_greedy(const std::vector<double>& q_values) {
-    std::uniform_real_distribution<> dist(0.0, 1.0);
-
-    if (dist(rng_) < exploration_rate_) {
-        std::uniform_int_distribution<> int_dist(0, (int)q_values.size() - 1);
-        return int_dist(rng_);
-    }
-
-    return select_best_action(q_values);
-}
-
 QLearningResult QLearningAdvisor::recommend_action(const AcupunctureState& state) {
     std::string state_key = state_to_key(state);
-    auto q_values = get_q_values(state_key);
+    auto preferences = get_action_preferences(state_key);
+    auto probs = compute_softmax(preferences);
 
-    int action_idx = select_action_epsilon_greedy(q_values);
-    bool is_exploration = (action_idx != select_best_action(q_values));
+    std::uniform_real_distribution<> dist(0.0, 1.0);
+    bool is_exploration = dist(rng_) < exploration_rate_;
 
-    double max_q = *std::max_element(q_values.begin(), q_values.end());
-    double min_q = *std::min_element(q_values.begin(), q_values.end());
-    double range = max_q - min_q;
-    double confidence = range > 0 ? (q_values[action_idx] - min_q) / range : 0.5;
+    int action_idx;
+    if (is_exploration) {
+        std::uniform_int_distribution<> int_dist(0, (int)probs.size() - 1);
+        action_idx = int_dist(rng_);
+    } else {
+        action_idx = sample_action_from_probabilities(probs);
+    }
+
+    int greedy_idx = select_best_action(probs);
+    if (!is_exploration) is_exploration = (action_idx != greedy_idx);
+
+    double state_value = critic_values_.count(state_key) ? critic_values_[state_key] : 0.0;
+    double confidence = probs[greedy_idx];
 
     QLearningResult result;
     result.recommended_action = actions_[action_idx];
-    result.expected_reward = q_values[action_idx];
+    result.expected_reward = probs[action_idx];
     result.confidence = confidence;
     result.is_exploration = is_exploration;
-    result.action_values = q_values;
+    result.action_values = preferences;
+    result.action_probabilities = probs;
+    result.state_value = state_value;
+    result.td_error = 0.0;
 
-    std::vector<int> indices(q_values.size());
+    std::vector<int> indices(probs.size());
     for (size_t i = 0; i < indices.size(); ++i) indices[i] = (int)i;
     std::sort(indices.begin(), indices.end(),
-        [&q_values](int a, int b) { return q_values[a] > q_values[b]; });
+        [&probs](int a, int b) { return probs[a] > probs[b]; });
 
-    int top_n = std::min(5, (int)q_values.size());
+    int top_n = std::min(5, (int)probs.size());
     for (int i = 0; i < top_n; ++i) {
         result.top_actions.push_back(actions_[indices[i]]);
     }
@@ -176,25 +206,72 @@ QLearningResult QLearningAdvisor::recommend_action(const AcupunctureState& state
     return result;
 }
 
+double QLearningAdvisor::normalize_reward(double raw_reward) const {
+    double abs_r = std::fabs(raw_reward);
+    if (abs_r < 1e-6) return 0.0;
+    double scaled = std::tanh(raw_reward / 10.0);
+    return scaled;
+}
+
+double QLearningAdvisor::compute_reward(const AcupunctureState& state,
+                                        const AcupunctureAction& action,
+                                        const AcupunctureState& next_state) const {
+    (void)state;
+    (void)action;
+
+    double deqi_improvement = next_state.deqi_intensity - state.deqi_intensity;
+    double pain_reduction = state.pain_level - next_state.pain_level;
+
+    double reward = deqi_improvement * 2.0 + pain_reduction * 1.5;
+
+    if (next_state.deqi_intensity > 0.7 && next_state.pain_level < 0.3) {
+        reward += 1.0;
+    }
+
+    double time_penalty = action.needle_retention_min * 0.005;
+    reward -= time_penalty;
+
+    return normalize_reward(reward);
+}
+
+double QLearningAdvisor::compute_td_error(double reward, const std::string& state_key,
+                                          const std::string& next_state_key, bool done) {
+    ensure_state_exists(state_key);
+    ensure_state_exists(next_state_key);
+
+    double v_current = critic_values_[state_key];
+    double v_next = done ? 0.0 : critic_values_[next_state_key];
+    double norm_reward = normalize_reward(reward);
+    double td_error = norm_reward + discount_factor_ * v_next - v_current;
+    return td_error;
+}
+
+void QLearningAdvisor::update_actor(const std::string& state_key, int action_taken, double td_error) {
+    ensure_state_exists(state_key);
+    auto& weights = actor_weights_[state_key];
+    auto probs = compute_softmax(weights);
+
+    for (size_t i = 0; i < weights.size(); ++i) {
+        double indicator = (i == (size_t)action_taken) ? 1.0 : 0.0;
+        double grad_log_pi = indicator - probs[i];
+        weights[i] += actor_learning_rate_ * td_error * grad_log_pi;
+    }
+}
+
+void QLearningAdvisor::update_critic(const std::string& state_key, double td_error) {
+    ensure_state_exists(state_key);
+    critic_values_[state_key] += critic_learning_rate_ * td_error;
+}
+
 void QLearningAdvisor::update_q_table(const TrainingEpisode& episode) {
     ensure_state_exists(episode.state_key);
     ensure_state_exists(episode.next_state_key);
 
-    auto& current_q = q_table_[episode.state_key];
-    auto& next_q = q_table_[episode.next_state_key];
+    double td_error = compute_td_error(episode.reward, episode.state_key,
+                                       episode.next_state_key, episode.done);
 
-    state_visit_count_[episode.state_key]++;
-
-    double old_value = current_q[episode.action_taken];
-    double next_max = *std::max_element(next_q.begin(), next_q.end());
-
-    double target = episode.reward;
-    if (!episode.done) {
-        target += discount_factor_ * next_max;
-    }
-
-    double new_value = old_value + learning_rate_ * (target - old_value);
-    current_q[episode.action_taken] = new_value;
+    update_critic(episode.state_key, td_error);
+    update_actor(episode.state_key, episode.action_taken, td_error);
 
     total_updates_++;
     total_reward_ += episode.reward;
@@ -217,27 +294,6 @@ void QLearningAdvisor::record_result(const AcupunctureState& state,
     update_q_table(episode);
 }
 
-double QLearningAdvisor::compute_reward(const AcupunctureState& state,
-                                        const AcupunctureAction& action,
-                                        const AcupunctureState& next_state) const {
-    (void)state;
-    (void)action;
-
-    double deqi_improvement = next_state.deqi_intensity - state.deqi_intensity;
-    double pain_reduction = state.pain_level - next_state.pain_level;
-
-    double reward = deqi_improvement * 50.0 + pain_reduction * 30.0;
-
-    if (next_state.deqi_intensity > 0.7 && next_state.pain_level < 0.3) {
-        reward += 20.0;
-    }
-
-    double time_penalty = action.needle_retention_min * 0.2;
-    reward -= time_penalty;
-
-    return reward;
-}
-
 void QLearningAdvisor::decay_exploration() {
     exploration_rate_ *= exploration_decay_;
     if (exploration_rate_ < min_exploration_rate_) {
@@ -250,8 +306,8 @@ std::vector<AcupunctureAction> QLearningAdvisor::get_all_actions() const {
 }
 
 void QLearningAdvisor::reset_q_table() {
-    q_table_.clear();
-    state_visit_count_.clear();
+    actor_weights_.clear();
+    critic_values_.clear();
     total_updates_ = 0;
     total_reward_ = 0;
     reward_count_ = 0;
@@ -274,15 +330,16 @@ void QLearningAdvisor::save_model(const std::string& path) const {
     std::ofstream f(path);
     if (!f.is_open()) return;
 
-    f << "Q_TABLE_V1\n";
-    f << q_table_.size() << "\n";
-    for (const auto& kv : q_table_) {
+    f << "ACTOR_CRITIC_V1\n";
+    f << actor_weights_.size() << "\n";
+    for (const auto& kv : actor_weights_) {
         f << kv.first << "\n";
-        f << kv.second.size() << "\n";
-        for (double v : kv.second) {
-            f << v << " ";
-        }
+        f << "ACTOR " << kv.second.size() << "\n";
+        for (double v : kv.second) f << v << " ";
         f << "\n";
+        auto cit = critic_values_.find(kv.first);
+        double cv = (cit != critic_values_.end()) ? cit->second : 0.0;
+        f << "CRITIC " << cv << "\n";
     }
     f.close();
 }
@@ -293,7 +350,7 @@ void QLearningAdvisor::load_model(const std::string& path) {
 
     std::string header;
     f >> header;
-    if (header != "Q_TABLE_V1") {
+    if (header != "ACTOR_CRITIC_V1" && header != "Q_TABLE_V1") {
         f.close();
         return;
     }
@@ -301,17 +358,32 @@ void QLearningAdvisor::load_model(const std::string& path) {
     size_t num_states;
     f >> num_states;
 
-    q_table_.clear();
+    actor_weights_.clear();
+    critic_values_.clear();
+
     for (size_t i = 0; i < num_states; ++i) {
         std::string key;
+        f >> key;
+
+        std::string type_tag;
         size_t num_actions;
-        f >> key >> num_actions;
+        f >> type_tag >> num_actions;
 
         std::vector<double> values(num_actions);
         for (size_t j = 0; j < num_actions; ++j) {
             f >> values[j];
         }
-        q_table_[key] = values;
+        actor_weights_[key] = values;
+
+        if (header == "ACTOR_CRITIC_V1") {
+            std::string critic_tag;
+            double cv;
+            f >> critic_tag >> cv;
+            critic_values_[key] = cv;
+        } else {
+            double mean_q = std::accumulate(values.begin(), values.end(), 0.0) / std::max(1, (int)values.size());
+            critic_values_[key] = mean_q;
+        }
     }
     f.close();
 }
