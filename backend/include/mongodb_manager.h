@@ -48,6 +48,7 @@ public:
         uint64_t start_time,
         uint64_t end_time
     );
+    std::vector<EfficacyRecord> get_all_efficacy_records(int limit = 1000);
 
     bool insert_alert(const Alert& alert);
     std::vector<Alert> query_alerts(
