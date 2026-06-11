@@ -186,3 +186,86 @@ TEST_CAT(Technique, 特征维度17维完整) {
         && f.band_power_high == f.band_power_high && f.skewness == f.skewness
         && f.median_frequency == f.median_frequency;
 }
+
+TEST_CAT(Technique, 去噪流水线有效_降低RMS) {
+    NeedleTechniqueClassifier c;
+    c.initialize(1000, 1000);
+    std::mt19937 rng(42);
+    auto clean = gen_lifting(1000, 1000, 3.0, 50, rng);
+    std::vector<double> noisy(clean.size());
+    std::normal_distribution<> nd(0, 30);
+    for (size_t i = 0; i < clean.size(); ++i) noisy[i] = clean[i] + nd(rng);
+    auto denoised = NeedleTechniqueClassifier::denoise_signal(noisy, 1000);
+
+    double rms_noisy = 0, rms_denoised = 0;
+    for (size_t i = 0; i < noisy.size(); ++i) {
+        rms_noisy += noisy[i] * noisy[i];
+        rms_denoised += denoised[i] * denoised[i];
+    }
+    rms_noisy = std::sqrt(rms_noisy / noisy.size());
+    rms_denoised = std::sqrt(rms_denoised / denoised.size());
+    return rms_denoised < rms_noisy * 0.9;
+}
+
+TEST_CAT(Technique, 数据增强生成多样本) {
+    NeedleTechniqueClassifier c;
+    c.initialize(1000, 1000);
+    std::mt19937 rng(123);
+
+    std::vector<std::vector<double>> samples;
+    std::vector<NeedleTechnique> labels;
+    for (int i = 0; i < 5; ++i) {
+        samples.push_back(gen_lifting(1000, 1000, 3.0, 60, rng));
+        labels.push_back(NeedleTechnique::LIFTING_THRUSTING);
+    }
+    for (int i = 0; i < 5; ++i) {
+        samples.push_back(gen_twirling(1000, 1000, 7.0, 55, rng));
+        labels.push_back(NeedleTechnique::TWIRLING);
+    }
+
+    std::vector<NeedleTechnique> aug_labels;
+    auto augmented = c.augment_samples(samples, labels, aug_labels, 3);
+
+    return augmented.size() == samples.size() * 3
+        && aug_labels.size() == labels.size() * 3
+        && augmented.size() > 0;
+}
+
+TEST_CAT(Technique, 低信噪比去噪后分类正确) {
+    NeedleTechniqueClassifier c;
+    c.initialize(1000, 1000);
+    std::mt19937 rng(888);
+    int correct = 0, total = 30;
+    for (int i = 0; i < total; ++i) {
+        auto clean = gen_lifting(1000, 1000, 2.5 + (i % 5) * 0.3, 60, rng);
+        std::vector<double> low_snr(clean.size());
+        std::normal_distribution<> nd(0, 50);
+        for (size_t j = 0; j < clean.size(); ++j) low_snr[j] = clean[j] + nd(rng);
+        auto r = c.analyze(low_snr, 100000 + i * 1000);
+        if (r.is_active) correct++;
+    }
+    double acc = (double)correct / total;
+    return acc >= 0.70;
+}
+
+TEST_CAT(Technique, 训练后损失下降) {
+    NeedleTechniqueClassifier c;
+    c.initialize(1000, 1000);
+    std::mt19937 rng(456);
+
+    std::vector<std::vector<double>> samples;
+    std::vector<NeedleTechnique> labels;
+    for (int i = 0; i < 30; ++i) {
+        samples.push_back(gen_resting(1000, rng));
+        labels.push_back(NeedleTechnique::RESTING);
+        samples.push_back(gen_lifting(1000, 1000, 3.0, 70, rng));
+        labels.push_back(NeedleTechnique::LIFTING_THRUSTING);
+    }
+
+    std::vector<NeedleTechnique> aug_labels;
+    auto augmented = c.augment_samples(samples, labels, aug_labels, 2);
+
+    double loss_before, loss_after;
+    bool ok = c.train(augmented, aug_labels, 1000, 0.001, 16, &loss_before, &loss_after);
+    return ok && loss_after < loss_before * 0.8;
+}
