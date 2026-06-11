@@ -67,6 +67,7 @@ struct AppConfig {
     ServiceEndpoint predictor;
     ServiceEndpoint topology;
     ServiceEndpoint alerter;
+    ServiceEndpoint analyzer;
     MongoDBConfig mongodb;
     BLEConfig ble;
     PredictorConfig predictor_model;
@@ -84,6 +85,9 @@ struct AppConfig {
     }
     std::string alerter_url() const {
         return "http://127.0.0.1:" + std::to_string(alerter.http_port);
+    }
+    std::string analyzer_url() const {
+        return "http://127.0.0.1:" + std::to_string(analyzer.http_port);
     }
 
     static AppConfig load(const std::string& path);
@@ -208,6 +212,9 @@ inline AppConfig AppConfig::load(const std::string& path) {
 
     cfg.alerter.host = SimpleYAML::get(s, "services.alerter", "host", "0.0.0.0");
     cfg.alerter.http_port = SimpleYAML::get_int(s, "services.alerter", "http_port", 8084);
+
+    cfg.analyzer.host = SimpleYAML::get(s, "services.analyzer", "host", "0.0.0.0");
+    cfg.analyzer.http_port = SimpleYAML::get_int(s, "services.analyzer", "http_port", 8085);
 
     cfg.mongodb.uri = SimpleYAML::get(s, "mongodb", "uri", "mongodb://localhost:27017");
     cfg.mongodb.db_name = SimpleYAML::get(s, "mongodb", "db_name", "tcm_acupuncture");
