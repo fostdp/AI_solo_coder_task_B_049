@@ -53,6 +53,8 @@ struct Metrics {
     void record_ws_disconnect() { ws_connections.fetch_sub(1, std::memory_order_relaxed); }
     void record_ws_broadcast() { ws_messages_sent.fetch_add(1, std::memory_order_relaxed); }
     void record_http_request() { http_requests.fetch_add(1, std::memory_order_relaxed); }
+    void record_technique_analysis() { prediction_count.fetch_add(1, std::memory_order_relaxed); }
+    void record_q_learning_update() { prediction_count.fetch_add(1, std::memory_order_relaxed); }
 
     std::string to_prometheus() const {
         std::ostringstream oss;
