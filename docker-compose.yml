@@ -1,0 +1,185 @@
+version: "3.9"
+
+x-backend-common: &backend-common
+  build:
+    context: .
+    dockerfile: Dockerfile.backend
+  restart: unless-stopped
+  depends_on:
+    mongodb:
+      condition: service_healthy
+  networks:
+    - tcm-net
+  volumes:
+    - ./config.yaml:/app/config.yaml:ro
+    - model-data:/app/models
+    - log-data:/app/logs
+  environment:
+    - SPDLOG_LEVEL=info
+    - MONGODB_URI=mongodb://mongodb:27017
+    - TCM_DB_NAME=tcm_acupuncture
+
+services:
+  mongodb:
+    image: mongo:7.0
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: tcm
+      MONGO_INITDB_ROOT_PASSWORD: tcm_dev_2024
+      MONGO_INITDB_DATABASE: tcm_acupuncture
+    volumes:
+      - mongo-data:/data/db
+      - ./mongodb/init_db.js:/docker-entrypoint-initdb.d/init_db.js:ro
+    networks:
+      - tcm-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')", "--username", "tcm", "--password", "tcm_dev_2024"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command: >
+      mongod
+      --wiredTigerCacheSizeGB 1
+      --setParameter ttlMonitorSleepSecs=60
+
+  tcm-ingest:
+    <<: *backend-common
+    container_name: tcm-ingest
+    command: ["/app/tcm_ingest", "--config", "/app/config.yaml"]
+    ports:
+      - "8080:8080"
+      - "8081:8081/udp"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  tcm-predictor:
+    <<: *backend-common
+    container_name: tcm-predictor
+    command: ["/app/tcm_predictor", "--config", "/app/config.yaml"]
+    ports:
+      - "8082:8082"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      tcm-ingest:
+        condition: service_started
+
+  tcm-topology:
+    <<: *backend-common
+    container_name: tcm-topology
+    command: ["/app/tcm_topology", "--config", "/app/config.yaml"]
+    ports:
+      - "8083:8083"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  tcm-alerter:
+    <<: *backend-common
+    container_name: tcm-alerter
+    command: ["/app/tcm_alerter", "--config", "/app/config.yaml"]
+    ports:
+      - "8084:8084"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      tcm-ingest:
+        condition: service_started
+
+  tcm-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: tcm-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    networks:
+      - tcm-net
+    depends_on:
+      - tcm-ingest
+      - tcm-predictor
+      - tcm-topology
+      - tcm-alerter
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+  tcm-simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile.simulator
+    container_name: tcm-simulator
+    restart: unless-stopped
+    networks:
+      - tcm-net
+    depends_on:
+      - tcm-ingest
+    environment:
+      - SIMULATOR_HOST=tcm-ingest
+      - SIMULATOR_UDP_PORT=8081
+      - SIMULATOR_HTTP_URL=http://tcm-ingest:8080
+      - SIMULATOR_VOLUNTEERS=30
+      - SIMULATOR_INTERVAL_MS=100
+      - SIMULATOR_INJECT_ANOMALIES=true
+      - SIMULATOR_ANOMALY_PROBABILITY=0.005
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: tcm-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    networks:
+      - tcm-net
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - tcm-ingest
+      - tcm-predictor
+      - tcm-topology
+      - tcm-alerter
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: tcm-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    networks:
+      - tcm-net
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana-dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana-datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  mongo-data:
+    driver: local
+  model-data:
+    driver: local
+  log-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+networks:
+  tcm-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
