@@ -1,0 +1,29 @@
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY ble_simulator /build/ble_simulator
+COPY backend/include/data_types.h /build/backend/include/data_types.h
+
+RUN mkdir -p /build/release && cd /build/release && \
+    cmake /build/ble_simulator -DCMAKE_BUILD_TYPE=Release && \
+    make -j$(nproc)
+
+FROM ubuntu:22.04 AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r tcm && useradd -r -g tcm -d /app -s /sbin/nologin tcm
+
+COPY --from=builder /build/release/ble_simulator /app/ble_simulator
+RUN chown -R tcm:tcm /app
+
+USER tcm
+WORKDIR /app
+
+CMD ["/app/ble_simulator", "--volunteers", "30", "--interval", "100", "--inject-anomalies"]
