@@ -33,12 +33,16 @@ class TCMApplication {
         this.canvas.onAcupointClick = (id) => {
             this.selectedAcupoint = id;
             this._scheduleChartUpdate();
+            if (this.advancedAnalysis && this.advancedAnalysis.currentAcupoints) {
+                this.advancedAnalysis.addAcupoint(id);
+            }
         };
         await this._loadInitialData();
         this._initWebSocket();
         this._bindEvents();
         this._startClock();
         this._startSimulatedData();
+        this._initAdvancedAnalysis();
     }
 
     _initDOM() {
@@ -53,7 +57,10 @@ class TCMApplication {
             alertList: document.getElementById('alert-list'),
             canvas: document.getElementById('meridian-canvas'),
             tooltip: document.getElementById('acupoint-tooltip'),
-            time: document.getElementById('current-time')
+            time: document.getElementById('current-time'),
+            analysisContainer: document.getElementById('analysis-container'),
+            viewMonitor: document.getElementById('view-monitor'),
+            viewAnalysis: document.getElementById('view-analysis')
         };
     }
 
@@ -280,6 +287,12 @@ class TCMApplication {
         document.getElementById('show-heatmap').onchange = (e) => this.canvas.setOptions({ showHeatmap: e.target.checked });
         document.getElementById('data-type').onchange = (e) => this.canvas.setOptions({ dataType: e.target.value });
         this.dom.volunteerSelect.onchange = (e) => { this.volunteerId = e.target.value; };
+
+        const navBtns = document.querySelectorAll('.nav-btn');
+        navBtns.forEach(btn => {
+            btn.onclick = () => this._switchView(btn.dataset.view);
+        });
+
         document.getElementById('btn-start-session').onclick = async () => {
             const sessionId = 'SES-' + Date.now();
             this.currentSession = { volunteerId: this.volunteerId, sessionId };
@@ -354,6 +367,38 @@ class TCMApplication {
             }
         };
         setInterval(inject, 120);
+    }
+
+    _initAdvancedAnalysis() {
+        if (!this.dom.analysisContainer || typeof AdvancedAnalysis === 'undefined') return;
+        this.advancedAnalysis = new AdvancedAnalysis(this.dom.analysisContainer);
+    }
+
+    _switchView(viewName) {
+        const navBtns = document.querySelectorAll('.nav-btn');
+        navBtns.forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.view === viewName);
+        });
+
+        this.dom.viewMonitor.classList.toggle('active', viewName === 'monitor');
+        this.dom.viewAnalysis.classList.toggle('active', viewName === 'analysis');
+
+        if (viewName === 'analysis' && this.advancedAnalysis) {
+            setTimeout(() => {
+                if (this.advancedAnalysis.resize) {
+                    this.advancedAnalysis.resize();
+                }
+            }, 100);
+        }
+
+        if (viewName === 'monitor') {
+            if (this.canvas && this.canvas.resize) {
+                this.canvas.resize();
+            }
+            if (this.charts && this.charts.resize) {
+                this.charts.resize();
+            }
+        }
     }
 }
 
