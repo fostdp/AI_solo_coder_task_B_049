@@ -12,12 +12,40 @@ find_package(prometheus-cpp CONFIG REQUIRED)
 set(CROW_INCLUDE ${CMAKE_SOURCE_DIR}/third_party/crow/include)
 set(SHARED_INCLUDE ${CMAKE_SOURCE_DIR}/backend/include ${CMAKE_SOURCE_DIR}/backend/shared/include)
 set(SHARED_DIR ${CMAKE_SOURCE_DIR}/backend/src)
+set(MODULES_DIR ${CMAKE_SOURCE_DIR}/backend/modules)
+
+set(MODULE_COMMON_SRCS
+    ${MODULES_DIR}/common/src/thread_pool.cpp
+)
+
+set(MODULE_RECOMMEND_SRCS
+    ${MODULES_DIR}/acupuncture_recommend/src/acupuncture_recommender.cpp
+    ${MODULE_COMMON_SRCS}
+)
+
+set(MODULE_CNN_SRCS
+    ${MODULES_DIR}/maneuver_cnn/src/maneuver_cnn.cpp
+    ${MODULE_COMMON_SRCS}
+)
+
+set(MODULE_RADAR_SRCS
+    ${MODULES_DIR}/energy_radar/src/energy_radar.cpp
+)
+
+set(MODULE_RL_SRCS
+    ${MODULES_DIR}/rl_adapter/src/rl_adapter.cpp
+)
 
 function(add_tcm_service NAME MAIN_SRC EXTRA_SRCS)
     add_executable(${NAME} ${MAIN_SRC} ${EXTRA_SRCS})
     target_include_directories(${NAME} PRIVATE
         ${CROW_INCLUDE}
         ${SHARED_INCLUDE}
+        ${MODULES_DIR}/common/include
+        ${MODULES_DIR}/acupuncture_recommend/include
+        ${MODULES_DIR}/maneuver_cnn/include
+        ${MODULES_DIR}/energy_radar/include
+        ${MODULES_DIR}/rl_adapter/include
         ${OPENSSL_INCLUDE_DIR}
     )
     target_link_libraries(${NAME} PRIVATE
@@ -75,10 +103,10 @@ add_tcm_service(tcm_alerter
 )
 
 set(ANALYZER_SRCS
-    ${SHARED_DIR}/apriori_recommender.cpp
-    ${SHARED_DIR}/needle_technique_classifier.cpp
-    ${SHARED_DIR}/meridian_energy_balancer.cpp
-    ${SHARED_DIR}/q_learning_advisor.cpp
+    ${MODULE_RECOMMEND_SRCS}
+    ${MODULE_CNN_SRCS}
+    ${MODULE_RADAR_SRCS}
+    ${MODULE_RL_SRCS}
     ${SHARED_DIR}/mongodb_manager.cpp
     ${SHARED_DIR}/acupoint_data.cpp
 )
