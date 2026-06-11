@@ -11,13 +11,19 @@ set(SHARED_INCLUDE
     ${CMAKE_SOURCE_DIR}/backend/shared/include
 )
 set(SHARED_DIR ${CMAKE_SOURCE_DIR}/backend/src)
+set(MODULES_DIR ${CMAKE_SOURCE_DIR}/backend/modules)
 set(TEST_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR})
 
+set(MODULE_COMMON_SRCS
+    ${MODULES_DIR}/common/src/thread_pool.cpp
+)
+
 set(TEST_SOURCES
-    ${SHARED_DIR}/apriori_recommender.cpp
-    ${SHARED_DIR}/needle_technique_classifier.cpp
-    ${SHARED_DIR}/meridian_energy_balancer.cpp
-    ${SHARED_DIR}/q_learning_advisor.cpp
+    ${MODULES_DIR}/acupuncture_recommend/src/acupuncture_recommender.cpp
+    ${MODULES_DIR}/maneuver_cnn/src/maneuver_cnn.cpp
+    ${MODULES_DIR}/energy_radar/src/energy_radar.cpp
+    ${MODULES_DIR}/rl_adapter/src/rl_adapter.cpp
+    ${MODULE_COMMON_SRCS}
     ${SHARED_DIR}/acupoint_data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_apriori.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_needle_technique.cpp
@@ -30,6 +36,11 @@ add_executable(tcm_tests ${TEST_SOURCES})
 
 target_include_directories(tcm_tests PRIVATE
     ${SHARED_INCLUDE}
+    ${MODULES_DIR}/common/include
+    ${MODULES_DIR}/acupuncture_recommend/include
+    ${MODULES_DIR}/maneuver_cnn/include
+    ${MODULES_DIR}/energy_radar/include
+    ${MODULES_DIR}/rl_adapter/include
     ${TEST_INCLUDE}
 )
 
