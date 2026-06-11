@@ -53,6 +53,7 @@ struct IngestContext {
     WebSocketManager* ws;
     DataProcessor* processor;
     std::string alerter_url;
+    std::string analyzer_url;
     std::string predictor_url;
     std::mutex mutex;
     crow::SimpleApp* app = nullptr;
@@ -144,6 +145,7 @@ static void on_sensor_cb(const SensorData& data) {
     std::string json_body = sensor_data_to_json(data);
     std::thread([json_body]() {
         http_post_json(g_ctx->alerter_url + "/api/sensor/forward", json_body);
+        http_post_json(g_ctx->analyzer_url + "/api/sensor/forward", json_body);
     }).detach();
 }
 
@@ -181,6 +183,7 @@ int main(int argc, char* argv[]) {
     ctx.ws = &ws;
     ctx.processor = &processor;
     ctx.alerter_url = cfg.alerter_url();
+    ctx.analyzer_url = cfg.analyzer_url();
     ctx.predictor_url = cfg.predictor_url();
     g_ctx = &ctx;
 
